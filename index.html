@@ -1,0 +1,477 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <title>demo</title>
+  <style>
+	.container{
+	display:grid;
+	}
+	.foundFrame{
+		border:3px solid green;
+		height:auto;
+	}
+	.notFoundFrame{
+		border:3px solid red;
+		height:auto;
+	}
+	.hideFrame{
+		border:0px solid black;
+		height:0px;
+	}
+	.videoPicker{
+		width:400px;
+		position:relative;
+		float:left;
+	}
+	.res{
+		width:100%;
+	}
+	#resA,#resB{
+		overflow-x:scroll;
+	}
+	html,body{
+	font-family:sans-serif;
+	color:#333;
+	}
+	</style>
+</head>
+  <body style="background-color:#bbb">
+
+<div class="container">
+<div class="row">
+	<div class="videoPicker">
+		<div class="controls">
+			<input type="file" id="iptVideoA" accept="video/mp4">
+		    <button id="startA">Start</button>
+		</div>
+  <table cellspacing="8" id="status">
+    <tr><th align="right">Fetch</th><td id="fetchA">Not started</td></tr>
+    <tr><th align="right">Demux</th><td id="demuxA">Not started</td></tr>
+    <tr><th align="right">Decode</th><td id="decodeA">Not started</td></tr>
+    <tr><th align="right">FPS</th><td id="renderA">Not started</td></tr>
+  </table>
+		<div id="resA">
+		</div>
+	</div>
+
+
+	<div class="videoPicker">
+		<div class="controls">
+			<input type="file"  id="iptVideoB" accept="video/mp4">
+		    <button id="startB">Start</button>
+		</div>
+  <table cellspacing="8" id="status">
+    <tr><th align="right">Fetch</th><td id="fetchB">Not started</td></tr>
+    <tr><th align="right">Demux</th><td id="demuxB">Not started</td></tr>
+    <tr><th align="right">Decode</th><td id="decodeB">Not started</td></tr>
+    <tr><th align="right">FPS</th><td id="renderB">Not started</td></tr>
+  </table>
+		<div id="resB"> 
+		</div>
+	</div>
+
+
+</div>
+
+<div class="row">
+	<button id="compare" type="button" disabled>compare</button>
+	<div>
+	<video id="videoResultA" style="width:350px;" muted></video>
+	<video id="videoResultB" style="width:350px;" muted></video>
+	</div>
+</div>
+<details>
+  <summary>Advanced</summary>
+  <div>
+  <p>
+  Video comparison is done by checking frames in one video against frames in another. 
+  Frames are hashed, smoothing out some compression artefact and allowing faster comparison.
+  Every hash is checked to see if it appears in the other video.
+  Differences in hashes can be compared as a percentage, the bigger the percent the more dissimilar the frames are.
+  </p>  
+  <table cellspacing="8" id="status">
+    <tr>
+		<th align="right">hash</th>
+		<td>
+			<select id="selHash">
+				<option value="dhash">Difference hash</option>
+				<option value="phash" selected>Perceptual hash</option>
+				<option value="ahash">Average hash</option>
+			</select>
+		</td>
+		<td>how frames are compared</td>
+		</tr>
+    <tr>
+	<th align="right">threshold</th>
+	<td><input type="range" id="iptThreshold" name="threshold" min="0.05" max="1" value="0.175"  step="0.05"/></td>
+	<td>What percentage of the image is needed until frames are considered a mismatch.<br/> 
+		Min = any change is a difference<br/> 
+		Max = whole frame must be different</td>
+	</tr>
+    <tr>
+	<th align="right">scale</th>
+	<td><input type="range" id="iptScale" name="scale" min="0.05" max="1" value="0.25"  step="0.1"/></td>
+	<td>How much to scale down the source video before comparing frames.<br/> 
+		Smaller is faster and less affected by noise.<br/> 
+		Larger is more faithful to the source video</td>
+	</tr>
+    <tr>
+	<th align="right">hash size</th>
+	<td><input type="range" id="iptHashSize" name="hashSize" min="8" max="64" value="16"  step="4"/></td>
+	<td>How long a frame is after being hashed.<br/> 
+		Larger hashes capture finer details at the expense of needing tigher thresholds.</td>
+	</tr>
+  </table>
+  </div>
+</details>
+<div>
+  <ul>
+	<li>This has only been tested in Chrome</li>
+	<li>Videos must be in .mp4 format</li>
+	<li>Source videos should have the same dimensions/aspect ratio</li>
+	<li>Frames will be matched regardless of when they occur in each video</li>
+  </ul>
+</div>
+</div>
+
+
+
+  <script type="module">
+  const settings = {
+	hashKind:'phash',//'phash' 'dhash' 'ahash'//not implemented yet: 'cropResistantHash' 'whash'
+	threshold:0.175,
+	scale:0.25,
+	//TODO: crop area
+	hashSize:16,
+	
+  };
+  const frames = {
+		A: [],
+		B: []
+	};
+	window.frameData = frames;
+	window.settings = settings;
+	
+	document.getElementById('selHash').onchange = (e)=>{
+		settings.hashKind = e.target.value;
+	}
+	document.getElementById('iptThreshold').onchange = (e)=>{
+		settings.threshold = Number(e.target.value);
+	}
+	document.getElementById('iptScale').onchange = (e)=>{
+		settings.scale = Number(e.target.value);
+	}
+	document.getElementById('iptHashSize').onchange = (e)=>{
+		settings.hashSize = Number(e.target.value);
+	}
+	
+	
+	
+	
+	function getMessage(message) {
+		if (message.data.kind=='hash') {
+			frames[message.data.id].push({
+				foundMatch:-1,
+				hash:ImageHash.fromHexString(message.data.message.hash),
+				timestamp:message.data.message.timestamp,
+				hashStr:message.data.message
+			});
+			return;
+		}
+		if (message.data.kind=='finish') {
+			console.log("finish!");
+			if(frames.A.length&&frames.B.length){
+				document.getElementById('compare').disabled = false;
+			}
+			return;
+		}
+		if(message.data.kind == "fetch"||
+		message.data.kind == "demux"||
+		message.data.kind == "decode"||
+		message.data.kind == "render"){
+			document.querySelector(`#${message.data.kind}${message.data.id}`).innerText= message.data.message;
+		}
+		
+	}
+
+
+
+//https://github.com/simon987/imagehash-web/blob/main/lib/hash.js
+class ImageHash {
+
+    binArray;
+
+    constructor(binArray) {
+        this.binArray = binArray;
+    }
+
+
+    static fromHexString(s) {
+        if (s.length % 2 !== 0) {
+            throw Error("hex string length must be a multiple of 2");
+        }
+        const arr = new Uint8ClampedArray(s.length * 4);
+
+        for (let i = 0; i < s.length; i += 2) {
+            const c = Number.parseInt(s.slice(i, i + 2), 16);
+
+            if (Number.isNaN(c)) {
+                throw Error("Invalid hex string");
+            }
+
+            arr[i * 4] = (c & 0x01);
+            arr[i * 4 + 1] = (c & 0x02) >> 1;
+            arr[i * 4 + 2] = (c & 0x04) >> 2;
+            arr[i * 4 + 3] = (c & 0x08) >> 3;
+            arr[i * 4 + 4] = (c & 0x10) >> 4;
+            arr[i * 4 + 5] = (c & 0x20) >> 5;
+            arr[i * 4 + 6] = (c & 0x40) >> 6;
+            arr[i * 4 + 7] = (c & 0x80) >> 7;
+        }
+
+        return new ImageHash(arr);
+    }
+    hammingDistance(hash) {
+        if (hash.binArray.length !== this.binArray.length) {
+            throw new Error("Cannot compare two ImageHash instances of different sizes");
+        }
+
+        let distance = 0;
+        for (let i = 0; i < this.binArray.length; i++) {
+            if (this.binArray[i] !== hash.binArray[i]) {
+                distance += 1;
+            }
+        }
+
+        return distance;
+    }
+}
+
+
+
+	const compareImageDataHash = (imgHashA, imgHashB) => {
+		const distance = imgHashA.hammingDistance(imgHashB);
+		const maxDist = imgHashA.binArray.length;
+		const percent = distance / maxDist;
+
+		return [percent <= settings.threshold, percent];
+	}
+	compare.onclick = ()=>{
+        for (let f = 0; f < frames.A.length; f += 1) {
+            const f1 = frames.A[f];
+            for (let ff = 0; ff < frames.B.length; ff += 1) {
+                const f2 = frames.B[ff];
+                const [same, percent] = compareImageDataHash(f1.hash, f2.hash);
+                if (same) {
+                    f1.foundMatch = ff;
+                    f2.foundMatch = f;
+                    break;
+                }
+            }
+        }
+        for (let f = 0; f < frames.B.length; f += 1) {
+            const f1 = frames.B[f];
+            if (f1.foundMatch >= 0) {
+                continue;//already found traversing A
+            }
+            for (let ff = 0; ff < frames.A.length; ff += 1) {
+                const f2 = frames.A[ff];
+                const [same, percent] = compareImageDataHash(f1.hash, f2.hash);
+                if (same) {
+                    f1.foundMatch = ff;
+                    f2.foundMatch = f;
+                    break;
+                }
+            }
+        }
+		
+        console.log(frames);
+		
+		const drawResults = ()=>{
+			for (let f = 0; f < frames.A.length; f += 1) {
+				const f1 = frames.A[f];
+				ctxA.strokeStyle = (f1.foundMatch>=0?'green':'red');
+				ctxA.beginPath();
+				ctxA.moveTo(f+0.5, 0); 
+				ctxA.lineTo(f+0.5, 32);
+				ctxA.lineWidth = 1;
+				ctxA.stroke();
+				ctxA.closePath();  
+			}
+			for (let f = 0; f < frames.B.length; f += 1) {
+				const f1 = frames.B[f];
+				ctxB.strokeStyle = (f1.foundMatch>=0?'green':'red');
+				ctxB.beginPath();
+				ctxB.moveTo(f+0.5, 0); 
+				ctxB.lineTo(f+0.5, 32);
+				ctxB.lineWidth = 1;
+				ctxB.stroke();
+				ctxB.closePath();  
+			}
+		}
+		//draw results
+		const ctxA = document.createElement('canvas').getContext('2d');
+		ctxA.canvas.width = frames.A.length;
+		ctxA.canvas.height= 32;
+		document.getElementById('resA').innerHTML = "";
+		document.getElementById('resA').appendChild(ctxA.canvas);ctxA.canvas.onmousemove = async (e)=>{
+			drawResults();
+			const tgt = e.target;
+			const elemRect = tgt.getBoundingClientRect();
+			const scaleX= tgt.width / elemRect.width;
+			const scaleY = tgt.height / elemRect.height;
+			const x = (e.clientX - elemRect.left) * scaleX;
+			const y =  (e.clientY - elemRect.top) * scaleY;
+			const frameNum = Math.floor(x);
+			const frame = frames.A[frameNum];
+			if(!frame){return;}
+			
+			ctxA.strokeStyle = ('yellow');
+			ctxA.beginPath();
+			ctxA.moveTo(Math.floor(x)+0.5, 0); 
+			ctxA.lineTo(Math.floor(x)+0.5, 32);
+			ctxA.lineWidth = 1;
+			ctxA.stroke();
+			ctxA.closePath();  
+			
+			const time = frame.timestamp/1000000;//microsecond to seconds
+			const videoElem = document.getElementById(`videoResultA`);
+			if (videoElem.readState <= HTMLMediaElement.HAVE_METADAT) {
+				console.warn("video not laoded");
+				await videoElem.play();
+				videoElem.pause();
+				return;
+			}
+			videoElem.currentTime = time;
+			
+			//also seek videoB to the found frame if it exists
+			videoElem.classList.remove('foundFrame');
+			videoElem.classList.remove('notFoundFrame');
+			videoElem.classList.add(frame.foundMatch<0?'notFoundFrame':'foundFrame');
+			videoElem.classList.remove('hideFrame');
+			const otherVideoElem = document.getElementById(`videoResultB`);
+			otherVideoElem.classList.add('hideFrame');
+			if(frame.foundMatch<0){return;}
+			
+			ctxB.strokeStyle = ('yellow');
+			ctxB.beginPath();
+			ctxB.moveTo(frame.foundMatch+0.5, 0); 
+			ctxB.lineTo(frame.foundMatch+0.5, 32);
+			ctxB.lineWidth = 1;
+			ctxB.stroke();
+			ctxB.closePath();  
+			
+			otherVideoElem.classList.remove('hideFrame');
+			const otherFrame = frames.B[frame.foundMatch];
+			const otherTime = otherFrame.timestamp/1000000;//microsecond to seconds
+			if (otherVideoElem.readState <= HTMLMediaElement.HAVE_METADAT) {
+				console.warn("video not laoded");
+				await otherVideoElem.play();
+				otherVideoElem.pause();
+				return;
+			}
+			otherVideoElem.currentTime = otherTime;
+		};
+		const ctxB = document.createElement('canvas').getContext('2d');
+		ctxB.canvas.width = frames.B.length;
+		ctxB.canvas.height= 32;
+		document.getElementById('resB').innerHTML = "";
+		document.getElementById('resB').appendChild(ctxB.canvas);
+		ctxB.canvas.onmousemove = async (e)=>{
+			drawResults();
+			const tgt = e.target;
+			const elemRect = tgt.getBoundingClientRect();
+			const scaleX= tgt.width / elemRect.width;
+			const scaleY = tgt.height / elemRect.height;
+			const x = (e.clientX - elemRect.left) * scaleX;
+			const y =  (e.clientY - elemRect.top) * scaleY;
+			const frameNum = Math.floor(x);
+			const frame = frames.B[frameNum];
+			if(!frame){return;}
+			ctxB.strokeStyle = ('yellow');
+			ctxB.beginPath();
+			ctxB.moveTo(Math.floor(x)+0.5, 0); 
+			ctxB.lineTo(Math.floor(x)+0.5, 32);
+			ctxB.lineWidth = 1;
+			ctxB.stroke();
+			ctxB.closePath();  
+			
+			const time = frame.timestamp/1000000;//microsecond to seconds
+			const videoElem = document.getElementById(`videoResultB`);
+			if (videoElem.readState <= HTMLMediaElement.HAVE_METADAT) {
+				console.warn("video not laoded");
+				await videoElem.play();
+				videoElem.pause();
+				return;
+			}
+			videoElem.currentTime = time;
+			
+			//also seek videoB to the found frame if it exists
+			videoElem.classList.remove('foundFrame');
+			videoElem.classList.remove('notFoundFrame');
+			videoElem.classList.add(frame.foundMatch<0?'notFoundFrame':'foundFrame');
+			videoElem.classList.remove('hideFrame');
+			const otherVideoElem = document.getElementById(`videoResultA`);
+			otherVideoElem.classList.add('hideFrame');
+			if(frame.foundMatch<0){return;}
+			ctxA.strokeStyle = ('yellow');
+			ctxA.beginPath();
+			ctxA.moveTo(frame.foundMatch+0.5, 0); 
+			ctxA.lineTo(frame.foundMatch+0.5, 32);
+			ctxA.lineWidth = 1;
+			ctxA.stroke();
+			ctxA.closePath();  
+			
+			otherVideoElem.classList.remove('hideFrame');
+			const otherFrame = frames.A[frame.foundMatch];
+			const otherTime = otherFrame.timestamp/1000000;//microsecond to seconds
+			if (otherVideoElem.readState <= HTMLMediaElement.HAVE_METADAT) {
+				console.warn("video not laoded");
+				await otherVideoElem.play();
+				otherVideoElem.pause();
+				return;
+			}
+			otherVideoElem.currentTime = otherTime;
+		};
+		drawResults();
+	}
+
+	const init = (id) => {
+		const iptVideo = document.getElementById(`iptVideo${id}`);
+
+		iptVideo.onchange = (evt) => {
+			const file = evt.target.files[0];
+			const dataUri = URL.createObjectURL(file);
+			
+			// Play button.
+			const startButton = document.querySelector(`#start${id}`);
+			startButton.disabled = false;
+			startButton.addEventListener("click", () => {
+				const videoCodec = 'vp8'; //avc,hevc,vp8,vp9,av1
+				const worker = new Worker("./worker.js");//TODO: worker.terminate()?
+				worker.addEventListener("message", getMessage);
+				startButton.disabled = true;
+				frames[id] = [];
+				worker.postMessage({
+					id,
+					dataUri,
+					hashSize:settings.hashSize,
+					hashKind:settings.hashKind,
+					scale:settings.scale
+				});
+			}, { once: true });
+			
+			const videoElem = document.getElementById(`videoResult${id}`);
+			videoElem.src = dataUri;
+			
+			
+		};
+	};
+	
+	init('A');
+	init('B');
+  </script>
+</body>
+</html>
+
